@@ -18,14 +18,19 @@ package ark
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"net/http"
 
 	"github.com/cloudwego/eino-ext/components/embedding/ark"
 	"github.com/cloudwego/eino/components/embedding"
+	"github.com/volcengine/volcengine-go-sdk/service/arkruntime/model"
 
 	contract "github.com/coze-dev/coze-studio/backend/infra/contract/embedding"
+	"github.com/coze-dev/coze-studio/backend/pkg/errorx"
 	"github.com/coze-dev/coze-studio/backend/pkg/lang/slices"
+	"github.com/coze-dev/coze-studio/backend/types/errno"
 )
 
 func NewArkEmbedder(ctx context.Context, config *ark.EmbeddingConfig, dimensions int64) (contract.Embedder, error) {
@@ -51,7 +56,21 @@ func (d embWrap) EmbedStrings(ctx context.Context, texts []string, opts ...embed
 		}
 		normed, err := d.slicedNormL2(partResult)
 		if err != nil {
-			return nil, err
+			var (
+				apiErr = &model.APIError{}
+				reqErr = &model.RequestError{}
+			)
+			if errors.As(err, &apiErr) {
+				if apiErr.HTTPStatusCode >= http.StatusInternalServerError ||
+					apiErr.HTTPStatusCode == http.StatusTooManyRequests {
+					return nil, err
+				}
+			} else if errors.As(err, &reqErr) {
+				if reqErr.HTTPStatusCode >= http.StatusInternalServerError {
+					return nil, err
+				}
+			}
+			return nil, errorx.WrapByCode(err, errno.ErrKnowledgeNonRetryableCode)
 		}
 		resp = append(resp, normed...)
 	}
