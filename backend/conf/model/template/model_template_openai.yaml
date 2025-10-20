@@ -1,4 +1,4 @@
-id: 2001
+id: 69010
 name: GPT-4o
 icon_uri: default_icon/openai_v2.png
 icon_url: ""
@@ -152,6 +152,7 @@ meta:
         frequency_penalty: 0
         presence_penalty: 0
         max_tokens: 4096
+        max_completion_tokens: 4096
         top_p: 1
         top_k: 0
         stop: []

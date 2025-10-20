@@ -19,11 +19,10 @@ package singleagent
 import (
 	"context"
 
-	intelligence "github.com/coze-dev/coze-studio/backend/api/model/intelligence/common"
-	"github.com/coze-dev/coze-studio/backend/api/model/ocean/cloud/developer_api"
-	"github.com/coze-dev/coze-studio/backend/api/model/project_memory"
+	"github.com/coze-dev/coze-studio/backend/api/model/app/developer_api"
+	intelligence "github.com/coze-dev/coze-studio/backend/api/model/app/intelligence/common"
+	"github.com/coze-dev/coze-studio/backend/api/model/data/variable/project_memory"
 	"github.com/coze-dev/coze-studio/backend/application/base/ctxutil"
-	"github.com/coze-dev/coze-studio/backend/crossdomain/contract/crossplugin"
 	"github.com/coze-dev/coze-studio/backend/domain/agent/singleagent/entity"
 	searchEntity "github.com/coze-dev/coze-studio/backend/domain/search/entity"
 	shortcutCMDEntity "github.com/coze-dev/coze-studio/backend/domain/shortcutcmd/entity"
@@ -138,8 +137,8 @@ func duplicateVariables(ctx context.Context, appContext *ServiceComponents, oldA
 	return newAgent, nil
 }
 
-func duplicatePlugin(ctx context.Context, _ *ServiceComponents, oldAgent, newAgent *entity.SingleAgent) (*entity.SingleAgent, error) {
-	err := crossplugin.DefaultSVC().DuplicateDraftAgentTools(ctx, oldAgent.AgentID, newAgent.AgentID)
+func duplicatePlugin(ctx context.Context, appContext *ServiceComponents, oldAgent, newAgent *entity.SingleAgent) (*entity.SingleAgent, error) {
+	err := appContext.PluginDomainSVC.DuplicateDraftAgentTools(ctx, oldAgent.AgentID, newAgent.AgentID)
 	if err != nil {
 		return nil, err
 	}

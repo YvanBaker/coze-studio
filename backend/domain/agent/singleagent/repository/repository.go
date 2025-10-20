@@ -19,15 +19,15 @@ package repository
 import (
 	"context"
 
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"github.com/coze-dev/coze-studio/backend/domain/agent/singleagent/entity"
 	"github.com/coze-dev/coze-studio/backend/domain/agent/singleagent/internal/dal"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/idgen"
+	"github.com/coze-dev/coze-studio/backend/infra/cache"
+	"github.com/coze-dev/coze-studio/backend/infra/idgen"
 )
 
-func NewSingleAgentRepo(db *gorm.DB, idGen idgen.IDGenerator, cli *redis.Client) SingleAgentDraftRepo {
+func NewSingleAgentRepo(db *gorm.DB, idGen idgen.IDGenerator, cli cache.Cmdable) SingleAgentDraftRepo {
 	return dal.NewSingleAgentDraftDAO(db, idGen, cli)
 }
 
@@ -35,7 +35,7 @@ func NewSingleAgentVersionRepo(db *gorm.DB, idGen idgen.IDGenerator) SingleAgent
 	return dal.NewSingleAgentVersion(db, idGen)
 }
 
-func NewCounterRepo(cli *redis.Client) CounterRepository {
+func NewCounterRepo(cli cache.Cmdable) CounterRepository {
 	return dal.NewCountRepo(cli)
 }
 
@@ -46,7 +46,7 @@ type SingleAgentDraftRepo interface {
 	MGet(ctx context.Context, agentIDs []int64) ([]*entity.SingleAgent, error)
 	Delete(ctx context.Context, spaceID, agentID int64) (err error)
 	Update(ctx context.Context, agentInfo *entity.SingleAgent) (err error)
-
+	Save(ctx context.Context, agentInfo *entity.SingleAgent) (err error)
 	GetDisplayInfo(ctx context.Context, userID, agentID int64) (*entity.AgentDraftDisplayInfo, error)
 	UpdateDisplayInfo(ctx context.Context, userID int64, e *entity.AgentDraftDisplayInfo) error
 }

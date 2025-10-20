@@ -25,11 +25,11 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
-	"github.com/coze-dev/coze-studio/backend/api/model/intelligence"
-	"github.com/coze-dev/coze-studio/backend/api/model/intelligence/common"
-	project "github.com/coze-dev/coze-studio/backend/api/model/project"
-	publish "github.com/coze-dev/coze-studio/backend/api/model/publish"
-	task "github.com/coze-dev/coze-studio/backend/api/model/task"
+	"github.com/coze-dev/coze-studio/backend/api/model/app/intelligence"
+	"github.com/coze-dev/coze-studio/backend/api/model/app/intelligence/common"
+	project "github.com/coze-dev/coze-studio/backend/api/model/app/intelligence/project"
+	publish "github.com/coze-dev/coze-studio/backend/api/model/app/intelligence/publish"
+	task "github.com/coze-dev/coze-studio/backend/api/model/app/intelligence/task"
 	appApplication "github.com/coze-dev/coze-studio/backend/application/app"
 	"github.com/coze-dev/coze-studio/backend/application/search"
 )
@@ -397,6 +397,26 @@ func DraftProjectCopy(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp, err := appApplication.APPApplicationSVC.DraftProjectCopy(ctx, &req)
+	if err != nil {
+		internalServerErrorResponse(ctx, c, err)
+		return
+	}
+
+	c.JSON(consts.StatusOK, resp)
+}
+
+// GetOnlineAppData .
+// @router /v1/apps/:app_id [GET]
+func GetOnlineAppData(ctx context.Context, c *app.RequestContext) {
+	var err error
+	var req project.GetOnlineAppDataRequest
+	err = c.BindAndValidate(&req)
+	if err != nil {
+		c.String(consts.StatusBadRequest, err.Error())
+		return
+	}
+
+	resp, err := appApplication.APPApplicationSVC.GetOnlineAppData(ctx, &req)
 	if err != nil {
 		internalServerErrorResponse(ctx, c, err)
 		return

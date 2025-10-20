@@ -20,33 +20,30 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"gorm.io/gorm"
 
+	"github.com/coze-dev/coze-studio/backend/api/model/app/bot_common"
 	"github.com/coze-dev/coze-studio/backend/api/model/crossdomain/agentrun"
-	"github.com/coze-dev/coze-studio/backend/api/model/crossdomain/plugin"
-	"github.com/coze-dev/coze-studio/backend/api/model/ocean/cloud/bot_common"
-	"github.com/coze-dev/coze-studio/backend/crossdomain/contract/crossworkflow"
+	"github.com/coze-dev/coze-studio/backend/crossdomain/contract/plugin/model"
+	crossworkflow "github.com/coze-dev/coze-studio/backend/crossdomain/contract/workflow"
 )
-
-type AgentRuntime struct {
-	AgentVersion     string
-	IsDraft          bool
-	SpaceID          int64
-	ConnectorID      int64
-	PreRetrieveTools []*agentrun.Tool
-}
 
 type EventType string
 
 const (
-	EventTypeOfChatModelAnswer EventType = "chatmodel_answer"
-	EventTypeOfToolsMessage    EventType = "tools_message"
-	EventTypeOfFuncCall        EventType = "func_call"
-	EventTypeOfSuggest         EventType = "suggest"
-	EventTypeOfKnowledge       EventType = "knowledge"
-	EventTypeOfInterrupt       EventType = "interrupt"
+	EventTypeOfChatModelAnswer        EventType = "chatmodel_answer"
+	EventTypeOfToolsAsChatModelStream EventType = "tools_as_chatmodel_answer"
+	EventTypeOfToolMidAnswer          EventType = "tool_mid_answer"
+	EventTypeOfToolsMessage           EventType = "tools_message"
+	EventTypeOfFuncCall               EventType = "func_call"
+	EventTypeOfSuggest                EventType = "suggest"
+	EventTypeOfKnowledge              EventType = "knowledge"
+	EventTypeOfInterrupt              EventType = "interrupt"
 )
 
 type AgentEvent struct {
 	EventType EventType
+
+	ToolMidAnswer         *schema.StreamReader[*schema.Message]
+	ToolAsChatModelAnswer *schema.StreamReader[*schema.Message]
 
 	ChatModelAnswer *schema.StreamReader[*schema.Message]
 	ToolsMessage    []*schema.Message
@@ -79,6 +76,8 @@ type SingleAgent struct {
 	JumpConfig              *bot_common.JumpConfig
 	BackgroundImageInfoList []*bot_common.BackgroundImageInfo
 	Database                []*bot_common.Database
+	BotMode                 bot_common.BotMode
+	LayoutInfo              *bot_common.LayoutInfo
 	ShortcutCommand         []string
 }
 
@@ -96,11 +95,13 @@ const (
 )
 
 type InterruptInfo struct {
-	AllToolInterruptData map[string]*plugin.ToolInterruptEvent
+	AllToolInterruptData map[string]*model.ToolInterruptEvent
 	AllWfInterruptData   map[string]*crossworkflow.ToolInterruptEvent
 	ToolCallID           string
 	InterruptType        InterruptEventType
 	InterruptID          string
+
+	ChatflowInterrupt *crossworkflow.StateMessage
 }
 
 type ExecuteRequest struct {
@@ -111,6 +112,10 @@ type ExecuteRequest struct {
 	History      []*schema.Message
 	ResumeInfo   *InterruptInfo
 	PreCallTools []*agentrun.ToolsRetriever
+
+	CustomVariables  map[string]string
+
+	ConversationID int64
 }
 
 type AgentIdentity struct {

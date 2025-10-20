@@ -1,4 +1,4 @@
-id: 2006
+id: 65010
 name: Claude-3.5-Sonnet
 icon_uri: default_icon/claude_v2.png
 icon_url: ""
@@ -74,11 +74,13 @@ meta:
         top_p: 1
         top_k: 0
         stop: []
+        enable_base64_url: false
         claude:
             by_bedrock: false
             access_key: ""
             secret_access_key: ""
             session_token: ""
             region: ""
+            budget_tokens: 0
         custom: {}
     status: 0

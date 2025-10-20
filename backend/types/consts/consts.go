@@ -19,6 +19,7 @@ package consts
 import "time"
 
 const (
+	RunMode            = "RUN_MODE"
 	MySQLDsn           = "MYSQL_DSN"
 	RedisAddr          = "REDIS_ADDR"
 	VeImageXAK         = "VE_IMAGEX_AK"
@@ -31,6 +32,7 @@ const (
 	FileUploadComponentType        = "FILE_UPLOAD_COMPONENT_TYPE"
 	FileUploadComponentTypeImagex  = "imagex"
 	FileUploadComponentTypeStorage = "storage"
+	StorageUploadHTTPScheme        = "STORAGE_UPLOAD_HTTP_SCHEME"
 
 	StorageType        = "STORAGE_TYPE"
 	MinIOAK            = "MINIO_AK"
@@ -43,7 +45,6 @@ const (
 	TOSSecretKey       = "TOS_SECRET_KEY"
 	TOSRegion          = "TOS_REGION"
 	TOSEndpoint        = "TOS_ENDPOINT"
-	TOSBucketEndpoint  = "TOS_BUCKET_ENDPOINT"
 	S3AccessKey        = "S3_ACCESS_KEY"
 	S3SecretKey        = "S3_SECRET_KEY"
 	S3Region           = "S3_REGION"
@@ -57,6 +58,8 @@ const (
 	MQServer                 = "MQ_NAME_SERVER"
 	RMQSecretKey             = "RMQ_SECRET_KEY"
 	RMQAccessKey             = "RMQ_ACCESS_KEY"
+	PulsarServiceURL         = "PULSAR_SERVICE_URL"
+	PulsarJWTToken           = "PULSAR_JWT_TOKEN"
 	RMQTopicApp              = "opencoze_search_app"
 	RMQTopicResource         = "opencoze_search_resource"
 	RMQTopicKnowledge        = "opencoze_knowledge"
@@ -85,6 +88,18 @@ const (
 	UseSSL      = "USE_SSL"
 	SSLCertFile = "SSL_CERT_FILE"
 	SSLKeyFile  = "SSL_KEY_FILE"
+
+	OCRType     = "OCR_TYPE"
+	VeOCRAK     = "VE_OCR_AK"
+	VeOCRSK     = "VE_OCR_SK"
+	PPOCRAPIURL = "PADDLEOCR_OCR_API_URL"
+
+	ParserType        = "PARSER_TYPE"
+	PPStructureAPIURL = "PADDLEOCR_STRUCTURE_API_URL"
+)
+
+const (
+	CtxLogIDKey = "log-id"
 )
 
 const (

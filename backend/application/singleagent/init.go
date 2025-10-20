@@ -18,7 +18,6 @@ package singleagent
 
 import (
 	"github.com/cloudwego/eino/compose"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"github.com/coze-dev/coze-studio/backend/domain/agent/singleagent/entity"
@@ -33,11 +32,12 @@ import (
 	shortcutCmd "github.com/coze-dev/coze-studio/backend/domain/shortcutcmd/service"
 	user "github.com/coze-dev/coze-studio/backend/domain/user/service"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/idgen"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/imagex"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/modelmgr"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/storage"
-	"github.com/coze-dev/coze-studio/backend/infra/impl/chatmodel"
+	"github.com/coze-dev/coze-studio/backend/infra/cache"
+	"github.com/coze-dev/coze-studio/backend/infra/chatmodel/impl/chatmodel"
+	"github.com/coze-dev/coze-studio/backend/infra/idgen"
+	"github.com/coze-dev/coze-studio/backend/infra/imagex"
+	"github.com/coze-dev/coze-studio/backend/infra/modelmgr"
+	"github.com/coze-dev/coze-studio/backend/infra/storage"
 	"github.com/coze-dev/coze-studio/backend/pkg/jsoncache"
 )
 
@@ -50,7 +50,7 @@ var SingleAgentSVC *SingleAgentApplicationService
 type ServiceComponents struct {
 	IDGen       idgen.IDGenerator
 	DB          *gorm.DB
-	Cache       *redis.Client
+	Cache       cache.Cmdable
 	TosClient   storage.Storage
 	ImageX      imagex.ImageX
 	EventBus    search.ProjectEventBus

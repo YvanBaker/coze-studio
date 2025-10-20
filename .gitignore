@@ -7,6 +7,7 @@
 
 .env
 .env.debug
+.env.oceanbase
 
 # Test binary, built with `go test -c`
 *.test
@@ -34,6 +35,7 @@ output/*
 
 # Vscode files
 .vscode/settings.json
+.vscode/launch.json
 
 /patches
 /oldimpl

@@ -19,7 +19,7 @@ package vo
 import (
 	"time"
 
-	"github.com/coze-dev/coze-studio/backend/api/model/ocean/cloud/workflow"
+	"github.com/coze-dev/coze-studio/backend/api/model/workflow"
 )
 
 type ContentType = workflow.WorkFlowType
@@ -68,6 +68,7 @@ type MetaUpdate struct {
 	IconURI                *string
 	HasPublished           *bool
 	LatestPublishedVersion *string
+	WorkflowMode           *Mode
 }
 
 type MetaQuery struct {
@@ -80,4 +81,5 @@ type MetaQuery struct {
 	LibOnly         bool
 	NeedTotalNumber bool
 	DescByUpdate    bool
+	Mode            *workflow.WorkflowMode
 }

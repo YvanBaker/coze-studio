@@ -43,6 +43,7 @@ type RunRecordMeta struct {
 	ChatRequest    *string         `json:"chat_message"`
 	CompletedAt    int64           `json:"completed_at"`
 	FailedAt       int64           `json:"failed_at"`
+	CreatorID      int64           `json:"creator_id"`
 }
 
 type ChunkRunItem = RunRecordMeta
@@ -105,23 +106,35 @@ type MetaInfo struct {
 }
 
 type AgentRunMeta struct {
-	ConversationID   int64                    `json:"conversation_id"`
-	ConnectorID      int64                    `json:"connector_id"`
-	SpaceID          int64                    `json:"space_id"`
-	Scene            common.Scene             `json:"scene"`
-	SectionID        int64                    `json:"section_id"`
-	Name             string                   `json:"name"`
-	UserID           string                   `json:"user_id"`
-	AgentID          int64                    `json:"agent_id"`
-	ContentType      message.ContentType      `json:"content_type"`
-	Content          []*message.InputMetaData `json:"content"`
-	PreRetrieveTools []*Tool                  `json:"tools"`
-	IsDraft          bool                     `json:"is_draft"`
-	CustomerConfig   *CustomerConfig          `json:"customer_config"`
-	DisplayContent   string                   `json:"display_content"`
-	CustomVariables  map[string]string        `json:"custom_variables"`
-	Version          string                   `json:"version"`
-	Ext              map[string]string        `json:"ext"`
+	ConversationID     int64                    `json:"conversation_id"`
+	ConnectorID        int64                    `json:"connector_id"`
+	SpaceID            int64                    `json:"space_id"`
+	Scene              common.Scene             `json:"scene"`
+	SectionID          int64                    `json:"section_id"`
+	Name               string                   `json:"name"`
+	UserID             string                   `json:"user_id"`
+	CozeUID            int64                    `json:"coze_uid"`
+	AgentID            int64                    `json:"agent_id"`
+	ContentType        message.ContentType      `json:"content_type"`
+	Content            []*message.InputMetaData `json:"content"`
+	PreRetrieveTools   []*Tool                  `json:"tools"`
+	IsDraft            bool                     `json:"is_draft"`
+	CustomerConfig     *CustomerConfig          `json:"customer_config"`
+	DisplayContent     string                   `json:"display_content"`
+	CustomVariables    map[string]string        `json:"custom_variables"`
+	Version            string                   `json:"version"`
+	Ext                map[string]string        `json:"ext"`
+	AdditionalMessages []*AdditionalMessage     `json:"additional_messages"`
+	ChatflowParameters map[string]any           `json:"chatflow_parameters"`
+}
+
+type AdditionalMessage struct {
+	Role        schema.RoleType          `json:"role"`
+	Type        message.MessageType      `json:"type"`
+	Content     []*message.InputMetaData `json:"content"`
+	ContentType message.ContentType      `json:"content_type"`
+	Name        *string                  `json:"name"`
+	Meta        map[string]string        `json:"meta"`
 }
 
 type UpdateMeta struct {
@@ -141,18 +154,35 @@ type AgentRunResponse struct {
 }
 
 type AgentRespEvent struct {
-	EventType message.MessageType
+	EventType message.MessageType `json:"event_type"`
 
-	ModelAnswer  *schema.StreamReader[*schema.Message]
-	ToolsMessage []*schema.Message
-	FuncCall     *schema.Message
-	Suggest      *schema.Message
-	Knowledge    []*schema.Document
-	Interrupt    *singleagent.InterruptInfo
-	Err          error
+	ToolMidAnswer *schema.StreamReader[*schema.Message]
+	ToolAsAnswer  *schema.StreamReader[*schema.Message]
+	ModelAnswer   *schema.StreamReader[*schema.Message]
+	ToolsMessage  []*schema.Message
+	FuncCall      *schema.Message
+	Suggest       *schema.Message
+	Knowledge     []*schema.Document
+	Interrupt     *singleagent.InterruptInfo
+	Err           error
 }
 
 type ModelAnswerEvent struct {
 	Message *schema.Message
 	Err     error
+}
+
+type ListRunRecordMeta struct {
+	ConversationID int64  `json:"conversation_id"`
+	AgentID        int64  `json:"agent_id"`
+	SectionID      int64  `json:"section_id"`
+	Limit          int32  `json:"limit"`
+	OrderBy        string `json:"order_by"` //desc asc
+	BeforeID       int64  `json:"before_id"`
+	AfterID        int64  `json:"after_id"`
+}
+
+type CancelRunMeta struct {
+	ConversationID int64 `json:"conversation_id"`
+	RunID          int64 `json:"run_id"`
 }

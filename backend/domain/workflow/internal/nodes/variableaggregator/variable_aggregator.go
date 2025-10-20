@@ -31,9 +31,13 @@ import (
 
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+	"github.com/mohae/deepcopy"
 
+	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity/vo"
+	"github.com/coze-dev/coze-studio/backend/domain/workflow/internal/canvas/convert"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/internal/nodes"
+	schema2 "github.com/coze-dev/coze-studio/backend/domain/workflow/internal/schema"
 	"github.com/coze-dev/coze-studio/backend/pkg/ctxcache"
 	"github.com/coze-dev/coze-studio/backend/pkg/lang/ptr"
 	"github.com/coze-dev/coze-studio/backend/pkg/safego"
@@ -48,24 +52,147 @@ const (
 type Config struct {
 	MergeStrategy MergeStrategy
 	GroupLen      map[string]int
-	FullSources   map[string]*nodes.SourceInfo
-	NodeKey       vo.NodeKey
-	InputSources  []*vo.FieldInfo
 	GroupOrder    []string // the order the groups are declared in frontend canvas
 }
 
-type VariableAggregator struct {
-	config *Config
+func (c *Config) Adapt(_ context.Context, n *vo.Node, _ ...nodes.AdaptOption) (*schema2.NodeSchema, error) {
+	ns := &schema2.NodeSchema{
+		Key:     vo.NodeKey(n.ID),
+		Type:    entity.NodeTypeVariableAggregator,
+		Name:    n.Data.Meta.Title,
+		Configs: c,
+	}
+
+	c.MergeStrategy = FirstNotNullValue
+	inputs := n.Data.Inputs
+
+	groupToLen := make(map[string]int, len(inputs.VariableAggregator.MergeGroups))
+	for i := range inputs.VariableAggregator.MergeGroups {
+		group := inputs.VariableAggregator.MergeGroups[i]
+		tInfo := &vo.TypeInfo{
+			Type:       vo.DataTypeObject,
+			Properties: make(map[string]*vo.TypeInfo),
+		}
+		ns.SetInputType(group.Name, tInfo)
+		for ii, v := range group.Variables {
+			name := strconv.Itoa(ii)
+			valueTypeInfo, err := convert.CanvasBlockInputToTypeInfo(v)
+			if err != nil {
+				return nil, err
+			}
+			tInfo.Properties[name] = valueTypeInfo
+			sources, err := convert.CanvasBlockInputToFieldInfo(v, compose.FieldPath{group.Name, name}, n.Parent())
+			if err != nil {
+				return nil, err
+			}
+			ns.AddInputSource(sources...)
+		}
+
+		length := len(group.Variables)
+		groupToLen[group.Name] = length
+	}
+
+	groupOrder := make([]string, 0, len(groupToLen))
+	for i := range inputs.VariableAggregator.MergeGroups {
+		group := inputs.VariableAggregator.MergeGroups[i]
+		groupOrder = append(groupOrder, group.Name)
+	}
+
+	c.GroupLen = groupToLen
+	c.GroupOrder = groupOrder
+
+	if err := convert.SetOutputTypesForNodeSchema(n, ns); err != nil {
+		return nil, err
+	}
+	return ns, nil
 }
 
-func NewVariableAggregator(_ context.Context, cfg *Config) (*VariableAggregator, error) {
-	if cfg == nil {
-		return nil, errors.New("config is required")
+func (c *Config) Build(_ context.Context, ns *schema2.NodeSchema, _ ...schema2.BuildOption) (any, error) {
+	if c.MergeStrategy != FirstNotNullValue {
+		return nil, fmt.Errorf("merge strategy not supported: %v", c.MergeStrategy)
 	}
-	if cfg.MergeStrategy != FirstNotNullValue {
-		return nil, fmt.Errorf("merge strategy not supported: %v", cfg.MergeStrategy)
+
+	return &VariableAggregator{
+		groupLen:    c.GroupLen,
+		fullSources: ns.FullSources,
+		nodeKey:     ns.Key,
+	}, nil
+}
+
+func (c *Config) FieldStreamType(path compose.FieldPath, ns *schema2.NodeSchema,
+	sc *schema2.WorkflowSchema) (schema2.FieldStreamType, error) {
+	if !sc.RequireStreaming() {
+		return schema2.FieldNotStream, nil
 	}
-	return &VariableAggregator{config: cfg}, nil
+
+	if len(path) == 2 { // asking about a specific index within a group
+		for _, fInfo := range ns.InputSources {
+			if len(fInfo.Path) == len(path) {
+				equal := true
+				for i := range fInfo.Path {
+					if fInfo.Path[i] != path[i] {
+						equal = false
+						break
+					}
+				}
+
+				if equal {
+					if fInfo.Source.Ref == nil || fInfo.Source.Ref.FromNodeKey == "" {
+						return schema2.FieldNotStream, nil // variables or static values
+					}
+					fromNodeKey := fInfo.Source.Ref.FromNodeKey
+					fromNode := sc.GetNode(fromNodeKey)
+					if fromNode == nil {
+						return schema2.FieldNotStream, fmt.Errorf("node %s not found", fromNodeKey)
+					}
+					return nodes.IsStreamingField(fromNode, fInfo.Source.Ref.FromPath, sc)
+				}
+			}
+		}
+	} else if len(path) == 1 { // asking about the entire group
+		var streamCount, notStreamCount int
+		for _, fInfo := range ns.InputSources {
+			if fInfo.Path[0] == path[0] { // belong to the group
+				if fInfo.Source.Ref != nil && len(fInfo.Source.Ref.FromNodeKey) > 0 {
+					fromNode := sc.GetNode(fInfo.Source.Ref.FromNodeKey)
+					if fromNode == nil {
+						return schema2.FieldNotStream, fmt.Errorf("node %s not found", fInfo.Source.Ref.FromNodeKey)
+					}
+					subStreamType, err := nodes.IsStreamingField(fromNode, fInfo.Source.Ref.FromPath, sc)
+					if err != nil {
+						return schema2.FieldNotStream, err
+					}
+
+					if subStreamType == schema2.FieldMaybeStream {
+						return schema2.FieldMaybeStream, nil
+					} else if subStreamType == schema2.FieldIsStream {
+						streamCount++
+					} else {
+						notStreamCount++
+					}
+				}
+			}
+		}
+
+		if streamCount > 0 && notStreamCount == 0 {
+			return schema2.FieldIsStream, nil
+		}
+
+		if streamCount == 0 && notStreamCount > 0 {
+			return schema2.FieldNotStream, nil
+		}
+
+		return schema2.FieldMaybeStream, nil
+	}
+
+	return schema2.FieldNotStream, fmt.Errorf("variable aggregator output path max len = 2, actual: %v", path)
+}
+
+type VariableAggregator struct {
+	groupLen    map[string]int
+	fullSources map[string]*schema2.SourceInfo
+	nodeKey     vo.NodeKey
+	groupOrder  []string // the order the groups are declared in frontend canvas
 }
 
 func (v *VariableAggregator) Invoke(ctx context.Context, input map[string]any) (_ map[string]any, err error) {
@@ -75,8 +202,8 @@ func (v *VariableAggregator) Invoke(ctx context.Context, input map[string]any) (
 	}
 
 	result := make(map[string]any)
-	groupToChoice := make(map[string]int)
-	for group, length := range v.config.GroupLen {
+	groupToChoice := make(map[string]any)
+	for group, length := range v.groupLen {
 		for i := 0; i < length; i++ {
 			if value, ok := in[group][i]; ok {
 				if value != nil {
@@ -88,19 +215,19 @@ func (v *VariableAggregator) Invoke(ctx context.Context, input map[string]any) (
 		}
 
 		if _, ok := result[group]; !ok {
-			groupToChoice[group] = -1
+			groupToChoice[group] = int64(-1)
 		}
 	}
 
-	_ = compose.ProcessState(ctx, func(ctx context.Context, state nodes.DynamicStreamContainer) error {
-		state.SaveDynamicChoice(v.config.NodeKey, groupToChoice)
+	_ = compose.ProcessState(ctx, func(ctx context.Context, state nodes.IntermediateResultStore) error {
+		state.SetIntermediateResult(v.nodeKey, groupToChoice)
 		return nil
 	})
 
-	ctxcache.Store(ctx, groupChoiceTypeCacheKey, map[string]nodes.FieldStreamType{}) // none of the choices are stream
+	ctxcache.Store(ctx, groupChoiceTypeCacheKey, map[string]schema2.FieldStreamType{}) // none of the choices are stream
 
-	groupChoices := make([]any, 0, len(v.config.GroupOrder))
-	for _, group := range v.config.GroupOrder {
+	groupChoices := make([]any, 0, len(v.groupOrder))
+	for _, group := range v.groupOrder {
 		choice := groupToChoice[group]
 		if choice == -1 {
 			groupChoices = append(groupChoices, nil)
@@ -115,9 +242,9 @@ func (v *VariableAggregator) Invoke(ctx context.Context, input map[string]any) (
 }
 
 const (
-	resolvedSourcesCacheKey = "resolved_sources"
 	groupChoiceTypeCacheKey = "group_choice_type"
 	groupChoiceCacheKey     = "group_choice"
+	firstOutputChunkKey     = "first_chunk_done"
 )
 
 // Transform picks the first non-nil value from each group from a stream of map[group]items.
@@ -125,33 +252,37 @@ func (v *VariableAggregator) Transform(ctx context.Context, input *schema.Stream
 	_ *schema.StreamReader[map[string]any], err error) {
 	inStream := streamInputConverter(input)
 
-	resolvedSources, ok := ctxcache.Get[map[string]*nodes.SourceInfo](ctx, resolvedSourcesCacheKey)
-	if !ok {
-		panic("unable to get resolvesSources from ctx cache.")
+	var resolvedSources map[string]*schema2.SourceInfo
+	_ = compose.ProcessState(ctx, func(_ context.Context, state nodes.DynamicStreamContainer) error {
+		resolvedSources = state.GetFullSources(v.nodeKey)
+		return nil
+	})
+	if resolvedSources == nil {
+		return nil, fmt.Errorf("variable aggregator can't get resolved sources")
 	}
 
 	groupToItems := make(map[string][]any)
-	groupToChoice := make(map[string]int)
+	groupToChoice := make(map[string]any)
 	type skipped struct{}
 	type null struct{}
 	type stream struct{}
 
 	defer func() {
 		if err == nil {
-			groupChoiceToStreamType := map[string]nodes.FieldStreamType{}
+			groupChoiceToStreamType := map[string]schema2.FieldStreamType{}
 			for group, choice := range groupToChoice {
-				if choice != -1 {
-					item := groupToItems[group][choice]
+				if choice != int64(-1) {
+					item := groupToItems[group][choice.(int64)]
 					if _, ok := item.(stream); ok {
-						groupChoiceToStreamType[group] = nodes.FieldIsStream
+						groupChoiceToStreamType[group] = schema2.FieldIsStream
 					}
 				}
 			}
 
-			groupChoices := make([]any, 0, len(v.config.GroupOrder))
-			for _, group := range v.config.GroupOrder {
+			groupChoices := make([]any, 0, len(v.groupOrder))
+			for _, group := range v.groupOrder {
 				choice := groupToChoice[group]
-				if choice == -1 {
+				if choice == int64(-1) {
 					groupChoices = append(groupChoices, nil)
 				} else {
 					groupChoices = append(groupChoices, choice)
@@ -174,16 +305,16 @@ func (v *VariableAggregator) Transform(ctx context.Context, input *schema.Stream
 	// - if an element is not stream, actually receive from the stream to check if it's non-nil
 
 	groupToCurrentIndex := make(map[string]int) // the currently known smallest index that is non-nil for each group
-	for group, length := range v.config.GroupLen {
+	for group, length := range v.groupLen {
 		groupToItems[group] = make([]any, length)
 		groupToCurrentIndex[group] = math.MaxInt
 		for i := 0; i < length; i++ {
 			fType := resolvedSources[group].SubSources[strconv.Itoa(i)].FieldType
-			if fType == nodes.FieldSkipped {
+			if fType == schema2.FieldSkipped {
 				groupToItems[group][i] = skipped{}
 				continue
 			}
-			if fType == nodes.FieldIsStream {
+			if fType == schema2.FieldIsStream {
 				groupToItems[group][i] = stream{}
 				if ci, _ := groupToCurrentIndex[group]; i < ci {
 					groupToCurrentIndex[group] = i
@@ -200,18 +331,18 @@ func (v *VariableAggregator) Transform(ctx context.Context, input *schema.Stream
 
 			_, ok := groupToItems[group][i].(stream)
 			if ok { // if none of the elements before this one is none-stream, pick this first stream
-				groupToChoice[group] = i
+				groupToChoice[group] = int64(i)
 				break
 			}
 		}
 
 		if _, ok := groupToChoice[group]; !ok && !hasUndecided {
-			groupToChoice[group] = -1 // all of this group's elements are skipped, won't have any non-nil ones
+			groupToChoice[group] = int64(-1) // all of this group's elements are skipped, won't have any non-nil ones
 		}
 	}
 
 	allDone := func() bool {
-		for group := range v.config.GroupLen {
+		for group := range v.groupLen {
 			_, ok := groupToChoice[group]
 			if !ok {
 				return false
@@ -223,11 +354,11 @@ func (v *VariableAggregator) Transform(ctx context.Context, input *schema.Stream
 
 	alreadyDone := allDone()
 	if alreadyDone { // all groups have made their choices, no need to actually read input streams
-		result := make(map[string]any, len(v.config.GroupLen))
+		result := make(map[string]any, len(v.groupLen))
 		allSkip := true
 		for group := range groupToChoice {
 			choice := groupToChoice[group]
-			if choice == -1 {
+			if choice == int64(-1) {
 				result[group] = nil // all elements of this group are skipped
 			} else {
 				result[group] = choice
@@ -236,8 +367,8 @@ func (v *VariableAggregator) Transform(ctx context.Context, input *schema.Stream
 		}
 
 		if allSkip { // no need to convert input streams for the output, because all groups are skipped
-			_ = compose.ProcessState(ctx, func(ctx context.Context, state nodes.DynamicStreamContainer) error {
-				state.SaveDynamicChoice(v.config.NodeKey, groupToChoice)
+			_ = compose.ProcessState(ctx, func(ctx context.Context, state nodes.IntermediateResultStore) error {
+				state.SetIntermediateResult(v.nodeKey, groupToChoice)
 				return nil
 			})
 			return schema.StreamReaderFromArray([]map[string]any{result}), nil
@@ -312,7 +443,7 @@ func (v *VariableAggregator) Transform(ctx context.Context, input *schema.Stream
 										continue
 									}
 
-									groupToChoice[group] = j
+									groupToChoice[group] = int64(j)
 									foundNonNil = true
 									break
 								} else {
@@ -321,10 +452,10 @@ func (v *VariableAggregator) Transform(ctx context.Context, input *schema.Stream
 								}
 							}
 							if !foundNonNil && !hasUndecided {
-								groupToChoice[group] = -1 // this group does not have any non-nil value
+								groupToChoice[group] = int64(-1) // this group does not have any non-nil value
 							}
 						} else {
-							groupToChoice[group] = i
+							groupToChoice[group] = int64(i)
 						}
 						if allDone() {
 							break recvLoop
@@ -335,8 +466,8 @@ func (v *VariableAggregator) Transform(ctx context.Context, input *schema.Stream
 		}
 	}
 
-	_ = compose.ProcessState(ctx, func(ctx context.Context, state nodes.DynamicStreamContainer) error {
-		state.SaveDynamicChoice(v.config.NodeKey, groupToChoice)
+	_ = compose.ProcessState(ctx, func(ctx context.Context, state nodes.IntermediateResultStore) error {
+		state.SetIntermediateResult(v.nodeKey, groupToChoice)
 		return nil
 	})
 
@@ -348,12 +479,12 @@ func (v *VariableAggregator) Transform(ctx context.Context, input *schema.Stream
 				panic(fmt.Sprintf("group %s does not have choice", group))
 			}
 
-			if choice < 0 {
+			if choice.(int64) < 0 {
 				panic(fmt.Sprintf("group %s choice = %d, less than zero, but found actual item in stream", group, choice))
 			}
 
-			if _, ok := items[choice]; ok {
-				out[group] = items[choice]
+			if _, ok := items[int(choice.(int64))]; ok {
+				out[group] = items[int(choice.(int64))]
 			}
 		}
 
@@ -366,7 +497,7 @@ func (v *VariableAggregator) Transform(ctx context.Context, input *schema.Stream
 
 	nullGroups := make(map[string]any)
 	for group, choice := range groupToChoice {
-		if choice < 0 {
+		if choice.(int64) < 0 {
 			nullGroups[group] = nil
 		}
 	}
@@ -416,28 +547,19 @@ type vaCallbackInput struct {
 	Variables []any  `json:"variables"`
 }
 
-func (v *VariableAggregator) Init(ctx context.Context) (context.Context, error) {
-	ctx = ctxcache.Init(ctx)
-
-	resolvedSources, err := nodes.ResolveStreamSources(ctx, v.config.FullSources)
-	if err != nil {
-		return nil, err
-	}
-
-	// need this info for callbacks.OnStart, so we put it in cache within Init()
-	ctxcache.Store(ctx, resolvedSourcesCacheKey, resolvedSources)
-
-	return ctx, nil
-}
-
 type streamMarkerType string
 
 const streamMarker streamMarkerType = "<Stream Data...>"
 
-func (v *VariableAggregator) ToCallbackInput(ctx context.Context, input map[string]any) (map[string]any, error) {
-	resolvedSources, ok := ctxcache.Get[map[string]*nodes.SourceInfo](ctx, resolvedSourcesCacheKey)
-	if !ok {
-		panic("unable to get resolved_sources from ctx cache")
+func (v *VariableAggregator) ToCallbackInput(ctx context.Context, input map[string]any) (
+	*nodes.StructuredCallbackInput, error) {
+	var resolvedSources map[string]*schema2.SourceInfo
+	_ = compose.ProcessState(ctx, func(_ context.Context, state nodes.DynamicStreamContainer) error {
+		resolvedSources = state.GetFullSources(v.nodeKey)
+		return nil
+	})
+	if resolvedSources == nil {
+		return nil, fmt.Errorf("variable aggregator can't get resolved sources")
 	}
 
 	in, err := inputConverter(input)
@@ -447,14 +569,14 @@ func (v *VariableAggregator) ToCallbackInput(ctx context.Context, input map[stri
 
 	merged := make([]vaCallbackInput, 0, len(in))
 
-	groupLen := v.config.GroupLen
+	groupLen := v.groupLen
 
 	for groupName, vars := range in {
 		orderedVars := make([]any, groupLen[groupName])
 		for index := range vars {
 			orderedVars[index] = vars[index]
 			if len(resolvedSources) > 0 {
-				if resolvedSources[groupName].SubSources[strconv.Itoa(index)].FieldType == nodes.FieldIsStream {
+				if resolvedSources[groupName].SubSources[strconv.Itoa(index)].FieldType == schema2.FieldIsStream {
 					// replace the streams with streamMarker,
 					// because we won't read, save to execution history, or display these streams to user
 					orderedVars[index] = streamMarker
@@ -473,13 +595,13 @@ func (v *VariableAggregator) ToCallbackInput(ctx context.Context, input map[stri
 		return merged[i].Name < merged[j].Name
 	})
 
-	return map[string]any{
+	return &nodes.StructuredCallbackInput{Input: map[string]any{
 		"mergeGroups": merged,
-	}, nil
+	}}, nil
 }
 
 func (v *VariableAggregator) ToCallbackOutput(ctx context.Context, output map[string]any) (*nodes.StructuredCallbackOutput, error) {
-	dynamicStreamType, ok := ctxcache.Get[map[string]nodes.FieldStreamType](ctx, groupChoiceTypeCacheKey)
+	dynamicStreamType, ok := ctxcache.Get[map[string]schema2.FieldStreamType](ctx, groupChoiceTypeCacheKey)
 	if !ok {
 		panic("unable to get dynamic stream types from ctx cache")
 	}
@@ -489,30 +611,41 @@ func (v *VariableAggregator) ToCallbackOutput(ctx context.Context, output map[st
 		panic("unable to get group choices from ctx cache")
 	}
 
+	firstChunkDone, ok := ctxcache.Get[bool](ctx, firstOutputChunkKey)
+	defer func() {
+		if !firstChunkDone {
+			ctxcache.Store(ctx, firstOutputChunkKey, true)
+		}
+	}()
+
 	if len(dynamicStreamType) == 0 {
-		return &nodes.StructuredCallbackOutput{
-			Output:    output,
-			RawOutput: output,
-			Extra: map[string]any{
+		sco := &nodes.StructuredCallbackOutput{
+			Output: output,
+		}
+		if !firstChunkDone {
+			sco.Extra = map[string]any{
 				"variable_select": groupChoices,
-			},
-		}, nil
+			}
+		}
+		return sco, nil
 	}
 
 	newOut := maps.Clone(output)
 	for k := range output {
-		if t, ok := dynamicStreamType[k]; ok && t == nodes.FieldIsStream {
+		if t, ok := dynamicStreamType[k]; ok && t == schema2.FieldIsStream {
 			newOut[k] = streamMarker
 		}
 	}
 
-	return &nodes.StructuredCallbackOutput{
-		Output:    newOut,
-		RawOutput: newOut,
-		Extra: map[string]any{
+	sco := &nodes.StructuredCallbackOutput{
+		Output: newOut,
+	}
+	if !firstChunkDone {
+		sco.Extra = map[string]any{
 			"variable_select": groupChoices,
-		},
-	}, nil
+		}
+	}
+	return sco, nil
 }
 
 func concatVACallbackInputs(vs [][]vaCallbackInput) ([]vaCallbackInput, error) {
@@ -520,7 +653,14 @@ func concatVACallbackInputs(vs [][]vaCallbackInput) ([]vaCallbackInput, error) {
 		return nil, nil
 	}
 
-	init := slices.Clone(vs[0])
+	init := make([]vaCallbackInput, len(vs[0]))
+	for i, v := range vs[0] {
+		init[i] = vaCallbackInput{
+			Name:      v.Name,
+			Variables: deepcopy.Copy(v.Variables).([]any),
+		}
+	}
+
 	for i := 1; i < len(vs); i++ {
 		next := vs[i]
 		for j := 0; j < len(next); j++ {

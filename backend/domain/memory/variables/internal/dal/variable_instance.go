@@ -22,11 +22,11 @@ import (
 	"gorm.io/gen"
 	"gorm.io/gorm"
 
-	"github.com/coze-dev/coze-studio/backend/api/model/project_memory"
+	"github.com/coze-dev/coze-studio/backend/api/model/data/variable/project_memory"
 	"github.com/coze-dev/coze-studio/backend/domain/memory/variables/entity"
 	"github.com/coze-dev/coze-studio/backend/domain/memory/variables/internal/dal/model"
 	"github.com/coze-dev/coze-studio/backend/domain/memory/variables/internal/dal/query"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/idgen"
+	"github.com/coze-dev/coze-studio/backend/infra/idgen"
 	"github.com/coze-dev/coze-studio/backend/pkg/errorx"
 	"github.com/coze-dev/coze-studio/backend/types/errno"
 )

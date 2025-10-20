@@ -19,39 +19,82 @@ package knowledge
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 
-	"github.com/coze-dev/coze-studio/backend/domain/workflow/crossdomain/knowledge"
+	"github.com/spf13/cast"
+
+	"github.com/coze-dev/coze-studio/backend/api/model/crossdomain/knowledge"
+	crossknowledge "github.com/coze-dev/coze-studio/backend/crossdomain/contract/knowledge"
+	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity"
+	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity/vo"
+	"github.com/coze-dev/coze-studio/backend/domain/workflow/internal/canvas/convert"
+	"github.com/coze-dev/coze-studio/backend/domain/workflow/internal/nodes"
+	"github.com/coze-dev/coze-studio/backend/domain/workflow/internal/schema"
 )
 
 type DeleterConfig struct {
-	KnowledgeID      int64
-	KnowledgeDeleter knowledge.KnowledgeOperator
+	KnowledgeID int64
 }
 
-type KnowledgeDeleter struct {
-	config *DeleterConfig
-}
-
-func NewKnowledgeDeleter(_ context.Context, cfg *DeleterConfig) (*KnowledgeDeleter, error) {
-	if cfg.KnowledgeDeleter == nil {
-		return nil, errors.New("knowledge deleter is required")
+func (d *DeleterConfig) Adapt(_ context.Context, n *vo.Node, _ ...nodes.AdaptOption) (*schema.NodeSchema, error) {
+	ns := &schema.NodeSchema{
+		Key:     vo.NodeKey(n.ID),
+		Type:    entity.NodeTypeKnowledgeDeleter,
+		Name:    n.Data.Meta.Title,
+		Configs: d,
 	}
-	return &KnowledgeDeleter{
-		config: cfg,
+
+	inputs := n.Data.Inputs
+	datasetListInfoParam := inputs.DatasetParam[0]
+	datasetIDs := datasetListInfoParam.Input.Value.Content.([]any)
+	if len(datasetIDs) == 0 {
+		return nil, fmt.Errorf("dataset ids is required")
+	}
+	knowledgeID, err := cast.ToInt64E(datasetIDs[0])
+	if err != nil {
+		return nil, err
+	}
+	d.KnowledgeID = knowledgeID
+
+	if err := convert.SetInputsForNodeSchema(n, ns); err != nil {
+		return nil, err
+	}
+
+	if err := convert.SetOutputTypesForNodeSchema(n, ns); err != nil {
+		return nil, err
+	}
+
+	return ns, nil
+}
+
+func (d *DeleterConfig) Build(_ context.Context, _ *schema.NodeSchema, _ ...schema.BuildOption) (any, error) {
+	return &Deleter{
+		KnowledgeID: d.KnowledgeID,
 	}, nil
 }
 
-func (k *KnowledgeDeleter) Delete(ctx context.Context, input map[string]any) (map[string]any, error) {
+type Deleter struct {
+	KnowledgeID int64
+}
+
+func (d *Deleter) Invoke(ctx context.Context, input map[string]any) (map[string]any, error) {
 	documentID, ok := input["documentID"].(string)
 	if !ok {
 		return nil, errors.New("documentID is required and must be a string")
 	}
 
-	req := &knowledge.DeleteDocumentRequest{
-		DocumentID: documentID,
+	docID, err := strconv.ParseInt(documentID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid document id: %s", documentID)
 	}
 
-	response, err := k.config.KnowledgeDeleter.Delete(ctx, req)
+	req := &knowledge.DeleteDocumentRequest{
+		DocumentID:  docID,
+		KnowledgeID: d.KnowledgeID,
+	}
+
+	response, err := crossknowledge.DefaultSVC().Delete(ctx, req)
 	if err != nil {
 		return nil, err
 	}

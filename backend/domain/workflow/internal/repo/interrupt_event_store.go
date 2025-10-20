@@ -26,12 +26,13 @@ import (
 
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity/vo"
+	"github.com/coze-dev/coze-studio/backend/infra/cache"
 	"github.com/coze-dev/coze-studio/backend/pkg/sonic"
 	"github.com/coze-dev/coze-studio/backend/types/errno"
 )
 
 type interruptEventStoreImpl struct {
-	redis *redis.Client
+	redis cache.Cmdable
 }
 
 const (
@@ -39,6 +40,7 @@ const (
 	interruptEventListKeyPattern   = "interrupt_event_list:%d"
 	interruptEventTTL              = 24 * time.Hour // Example: expire after 24 hours
 	previousResumedEventKeyPattern = "previous_resumed_event:%d"
+	ConvToEventExecFormat          = "conv_relate_info:%d"
 )
 
 // SaveInterruptEvents saves multiple interrupt events to the end of a Redis list.
@@ -81,7 +83,7 @@ func (i *interruptEventStoreImpl) SaveInterruptEvents(ctx context.Context, wfExe
 
 	previousEventStr, err := i.redis.Get(ctx, previousResumedEventKey).Result()
 	if err != nil {
-		if !errors.Is(err, redis.Nil) {
+		if !errors.Is(err, cache.Nil) {
 			return fmt.Errorf("failed to get previous resumed event for wfExeID %d: %w", wfExeID, err)
 		}
 	}
@@ -154,7 +156,7 @@ func (i *interruptEventStoreImpl) GetFirstInterruptEvent(ctx context.Context, wf
 
 	eventJSON, err := i.redis.LIndex(ctx, listKey, 0).Result()
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
+		if errors.Is(err, cache.Nil) {
 			return nil, false, nil // List is empty or key does not exist
 		}
 		return nil, false, fmt.Errorf("failed to get first interrupt event from Redis list for wfExeID %d: %w", wfExeID, err)
@@ -203,7 +205,7 @@ func (i *interruptEventStoreImpl) PopFirstInterruptEvent(ctx context.Context, wf
 
 	eventJSON, err := i.redis.LPop(ctx, listKey).Result()
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
+		if errors.Is(err, cache.Nil) {
 			return nil, false, nil // List is empty or key does not exist
 		}
 		return nil, false, vo.WrapError(errno.ErrRedisError,
@@ -227,7 +229,7 @@ func (i *interruptEventStoreImpl) ListInterruptEvents(ctx context.Context, wfExe
 
 	eventJSONs, err := i.redis.LRange(ctx, listKey, 0, -1).Result()
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
+		if errors.Is(err, cache.Nil) {
 			return nil, nil // List is empty or key does not exist
 		}
 		return nil, vo.WrapError(errno.ErrRedisError,
@@ -246,4 +248,34 @@ func (i *interruptEventStoreImpl) ListInterruptEvents(ctx context.Context, wfExe
 	}
 
 	return events, nil
+}
+
+func (i *interruptEventStoreImpl) BindConvRelatedInfo(ctx context.Context, convID int64, info entity.ConvRelatedInfo) error {
+	data, err := sonic.Marshal(info)
+	if err != nil {
+		return err
+	}
+	result := i.redis.Set(ctx, fmt.Sprintf(ConvToEventExecFormat, convID), data, interruptEventTTL)
+	if result.Err() != nil {
+		return result.Err()
+	}
+	return nil
+}
+
+func (i *interruptEventStoreImpl) GetConvRelatedInfo(ctx context.Context, convID int64) (*entity.ConvRelatedInfo, bool, func() error, error) {
+	data, err := i.redis.Get(ctx, fmt.Sprintf(ConvToEventExecFormat, convID)).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, false, nil, nil
+		}
+		return nil, false, nil, err
+	}
+	rInfo := &entity.ConvRelatedInfo{}
+	err = sonic.UnmarshalString(string(data), rInfo)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	return rInfo, true, func() error {
+		return i.redis.Del(ctx, fmt.Sprintf(ConvToEventExecFormat, convID)).Err()
+	}, nil
 }

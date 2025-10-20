@@ -18,36 +18,90 @@ package emitter
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/bytedance/sonic"
+	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
+	workflow2 "github.com/coze-dev/coze-studio/backend/api/model/workflow"
+	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity/vo"
+	"github.com/coze-dev/coze-studio/backend/domain/workflow/internal/canvas/convert"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/internal/nodes"
+	schema2 "github.com/coze-dev/coze-studio/backend/domain/workflow/internal/schema"
+	"github.com/coze-dev/coze-studio/backend/pkg/ctxcache"
+	"github.com/coze-dev/coze-studio/backend/pkg/lang/ptr"
 	"github.com/coze-dev/coze-studio/backend/pkg/logs"
 	"github.com/coze-dev/coze-studio/backend/pkg/safego"
 )
 
 type OutputEmitter struct {
-	cfg *Config
+	Template    string
+	FullSources map[string]*schema2.SourceInfo
+	NodeKey     vo.NodeKey
 }
 
 type Config struct {
-	Template    string
-	FullSources map[string]*nodes.SourceInfo
+	Template string
 }
 
-func New(_ context.Context, cfg *Config) (*OutputEmitter, error) {
-	if cfg == nil {
-		return nil, errors.New("config is required")
+func (c *Config) Adapt(_ context.Context, n *vo.Node, _ ...nodes.AdaptOption) (*schema2.NodeSchema, error) {
+	ns := &schema2.NodeSchema{
+		Key:     vo.NodeKey(n.ID),
+		Type:    entity.NodeTypeOutputEmitter,
+		Name:    n.Data.Meta.Title,
+		Configs: c,
 	}
 
+	content := n.Data.Inputs.Content
+	streamingOutput := n.Data.Inputs.StreamingOutput
+
+	if streamingOutput {
+		ns.StreamConfigs = &schema2.StreamConfig{
+			RequireStreamingInput: true,
+		}
+	} else {
+		ns.StreamConfigs = &schema2.StreamConfig{
+			RequireStreamingInput: false,
+		}
+	}
+
+	if content != nil {
+		if content.Type != vo.VariableTypeString {
+			return nil, fmt.Errorf("output emitter node's content type must be %s, got %s", vo.VariableTypeString, content.Type)
+		}
+
+		if content.Value.Type != vo.BlockInputValueTypeLiteral {
+			return nil, fmt.Errorf("output emitter node's content value type must be %s, got %s", vo.BlockInputValueTypeLiteral, content.Value.Type)
+		}
+
+		if content.Value.Content == nil {
+			c.Template = ""
+		} else {
+			template, ok := content.Value.Content.(string)
+			if !ok {
+				return nil, fmt.Errorf("output emitter node's content value must be string, got %v", content.Value.Content)
+			}
+
+			c.Template = template
+		}
+	}
+
+	if err := convert.SetInputsForNodeSchema(n, ns); err != nil {
+		return nil, err
+	}
+
+	return ns, nil
+}
+
+func (c *Config) Build(_ context.Context, ns *schema2.NodeSchema, _ ...schema2.BuildOption) (any, error) {
 	return &OutputEmitter{
-		cfg: cfg,
+		Template:    c.Template,
+		FullSources: ns.FullSources,
+		NodeKey:     ns.Key,
 	}, nil
 }
 
@@ -59,10 +113,10 @@ type cachedVal struct {
 
 type cacheStore struct {
 	store map[string]*cachedVal
-	infos map[string]*nodes.SourceInfo
+	infos map[string]*schema2.SourceInfo
 }
 
-func newCacheStore(infos map[string]*nodes.SourceInfo) *cacheStore {
+func newCacheStore(infos map[string]*schema2.SourceInfo) *cacheStore {
 	return &cacheStore{
 		store: make(map[string]*cachedVal),
 		infos: infos,
@@ -76,7 +130,7 @@ func (c *cacheStore) put(k string, v any) (any, error) {
 	}
 
 	if !sInfo.IsIntermediate { // this is not an intermediate object container
-		isStream := sInfo.FieldType == nodes.FieldIsStream
+		isStream := sInfo.FieldType == schema2.FieldIsStream
 		if !isStream {
 			_, ok := c.store[k]
 			if !ok {
@@ -159,7 +213,7 @@ func (c *cacheStore) put(k string, v any) (any, error) {
 func (c *cacheStore) finished(k string) bool {
 	cached, ok := c.store[k]
 	if !ok {
-		return c.infos[k].FieldType == nodes.FieldSkipped
+		return c.infos[k].FieldType == schema2.FieldSkipped
 	}
 
 	if cached.finished {
@@ -182,7 +236,7 @@ func (c *cacheStore) finished(k string) bool {
 	return true
 }
 
-func (c *cacheStore) find(part nodes.TemplatePart) (root any, subCache *cachedVal, sourceInfo *nodes.SourceInfo,
+func (c *cacheStore) find(part nodes.TemplatePart) (root any, subCache *cachedVal, sourceInfo *schema2.SourceInfo,
 	actualPath []string,
 ) {
 	rootCached, ok := c.store[part.Root]
@@ -230,7 +284,7 @@ func (c *cacheStore) readyForPart(part nodes.TemplatePart, sw *schema.StreamWrit
 	hasErr bool, partFinished bool) {
 	cachedRoot, subCache, sourceInfo, _ := c.find(part)
 	if cachedRoot != nil && subCache != nil {
-		if subCache.finished || sourceInfo.FieldType == nodes.FieldIsStream {
+		if subCache.finished || sourceInfo.FieldType == schema2.FieldIsStream {
 			hasErr = renderAndSend(part, part.Root, cachedRoot, sw)
 			if hasErr {
 				return true, false
@@ -242,45 +296,6 @@ func (c *cacheStore) readyForPart(part nodes.TemplatePart, sw *schema.StreamWrit
 	}
 
 	return false, false
-}
-
-func (c *cacheStore) fillZero(nodeKey vo.NodeKey) map[string]any {
-	filled := make(map[string]any)
-	for field, sInfo := range c.infos {
-		if !sInfo.FromNode(nodeKey) {
-			continue
-		}
-
-		cacheV, ok := c.store[field]
-		if !sInfo.IsIntermediate {
-			if !ok {
-				c.store[field] = &cachedVal{
-					val:       sInfo.TypeInfo.Zero(),
-					finished:  true,
-					subCaches: nil,
-				}
-
-				filled[field] = true
-			}
-
-			continue
-		}
-
-		if !ok {
-			cacheV = &cachedVal{
-				val:       make(map[string]any),
-				subCaches: newCacheStore(sInfo.SubSources),
-			}
-			c.store[field] = cacheV
-		}
-
-		subFilled := cacheV.subCaches.fillZero(nodeKey)
-		if len(subFilled) > 0 {
-			filled[field] = subFilled
-		}
-	}
-
-	return filled
 }
 
 func merge(a, b any) any {
@@ -315,14 +330,18 @@ func merge(a, b any) any {
 
 const outputKey = "output"
 
-func (e *OutputEmitter) EmitStream(ctx context.Context, in *schema.StreamReader[map[string]any]) (out *schema.StreamReader[map[string]any], err error) {
-	resolvedSources, err := nodes.ResolveStreamSources(ctx, e.cfg.FullSources)
-	if err != nil {
-		return nil, err
+func (e *OutputEmitter) Transform(ctx context.Context, in *schema.StreamReader[map[string]any]) (out *schema.StreamReader[map[string]any], err error) {
+	var resolvedSources map[string]*schema2.SourceInfo
+	_ = compose.ProcessState(ctx, func(_ context.Context, state nodes.DynamicStreamContainer) error {
+		resolvedSources = state.GetFullSources(e.NodeKey)
+		return nil
+	})
+	if resolvedSources == nil {
+		return nil, fmt.Errorf("output emitter can't get resolved sources")
 	}
 
 	sr, sw := schema.Pipe[map[string]any](0)
-	parts := nodes.ParseTemplate(e.cfg.Template)
+	parts := nodes.ParseTemplate(e.Template)
 	safego.Go(ctx, func() {
 		hasErr := false
 		defer func() {
@@ -393,28 +412,6 @@ func (e *OutputEmitter) EmitStream(ctx context.Context, in *schema.StreamReader[
 						break
 					}
 
-					if sn, ok := schema.GetSourceName(err); ok {
-						// received end signal for a particular predecessor nodeID, do the following:
-						// - obtain the field sources mapped from this predecessor node
-						// - check which fields are still missing in the cache store
-						// - fill zero value for these missing fields
-						// - check if the current template part should be rendered and sent immediately
-						// - check if we should move on to next part in template
-						filled := caches.fillZero(vo.NodeKey(sn))
-						if _, okk := filled[part.Root]; okk {
-							// current part is influenced by the 'fill zero' operation
-							hasErr, shouldChangePart = caches.readyForPart(part, sw)
-							if hasErr {
-								return
-							}
-							if shouldChangePart {
-								continue partsLoop
-							}
-						}
-
-						continue
-					}
-
 					hasErr = true
 					sw.Send(nil, err) // real error
 					return
@@ -454,7 +451,7 @@ func (e *OutputEmitter) EmitStream(ctx context.Context, in *schema.StreamReader[
 									shouldChangePart = true
 								}
 							} else {
-								if sourceInfo.FieldType == nodes.FieldIsStream {
+								if sourceInfo.FieldType == schema2.FieldIsStream {
 									currentV := v
 									for i := 0; i < len(actualPath)-1; i++ {
 										currentM, ok := currentV.(map[string]any)
@@ -518,8 +515,17 @@ func (e *OutputEmitter) EmitStream(ctx context.Context, in *schema.StreamReader[
 	return sr, nil
 }
 
-func (e *OutputEmitter) Emit(ctx context.Context, in map[string]any) (output map[string]any, err error) {
-	s, err := nodes.Render(ctx, e.cfg.Template, in, e.cfg.FullSources)
+func (e *OutputEmitter) Invoke(ctx context.Context, in map[string]any) (output map[string]any, err error) {
+	var resolvedSources map[string]*schema2.SourceInfo
+	_ = compose.ProcessState(ctx, func(_ context.Context, state nodes.DynamicStreamContainer) error {
+		resolvedSources = state.GetFullSources(e.NodeKey)
+		return nil
+	})
+	if resolvedSources == nil {
+		return nil, fmt.Errorf("output emitter can't get resolved sources")
+	}
+
+	s, err := nodes.Render(ctx, e.Template, in, resolvedSources)
 	if err != nil {
 		return nil, err
 	}
@@ -552,4 +558,54 @@ func renderAndSend(tp nodes.TemplatePart, k string, v any, sw *schema.StreamWrit
 
 	sw.Send(map[string]any{outputKey: r}, nil)
 	return false
+}
+
+func (e *OutputEmitter) ToCallbackInput(ctx context.Context, in map[string]any) (
+	*nodes.StructuredCallbackInput, error) {
+	type streamExtraChunkDone struct{}
+	var extraChunkDone bool
+	extraChunkDone = ctxcache.HasKey(ctx, streamExtraChunkDone{})
+	defer func() {
+		if !extraChunkDone {
+			ctxcache.Store(ctx, streamExtraChunkDone{}, true)
+		}
+	}()
+
+	sci := &nodes.StructuredCallbackInput{
+		Input: in,
+	}
+
+	if !extraChunkDone {
+		sci.Extra = map[string]any{
+			"terminal_plan": workflow2.TerminatePlanType_USESETTING,
+		}
+	}
+
+	return sci, nil
+}
+
+func (e *OutputEmitter) ToCallbackOutput(ctx context.Context, out map[string]any) (
+	*nodes.StructuredCallbackOutput, error) {
+	type streamExtraChunkDone struct{}
+	var extraChunkDone bool
+	extraChunkDone = ctxcache.HasKey(ctx, streamExtraChunkDone{})
+	defer func() {
+		if !extraChunkDone {
+			ctxcache.Store(ctx, streamExtraChunkDone{}, true)
+		}
+	}()
+
+	sco := &nodes.StructuredCallbackOutput{
+		Output:    out,
+		Answer:    ptr.Of(out[outputKey].(string)),
+		OutputStr: ptr.Of(out[outputKey].(string)),
+	}
+
+	if !extraChunkDone {
+		sco.Extra = map[string]any{
+			"terminal_plan": workflow2.TerminatePlanType_USESETTING,
+		}
+	}
+
+	return sco, nil
 }

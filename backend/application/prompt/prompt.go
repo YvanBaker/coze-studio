@@ -19,7 +19,7 @@ package prompt
 import (
 	"context"
 
-	"github.com/coze-dev/coze-studio/backend/api/model/ocean/cloud/playground"
+	"github.com/coze-dev/coze-studio/backend/api/model/playground"
 	"github.com/coze-dev/coze-studio/backend/api/model/resource/common"
 	"github.com/coze-dev/coze-studio/backend/application/base/ctxutil"
 	"github.com/coze-dev/coze-studio/backend/application/search"
@@ -199,11 +199,7 @@ func (p *PromptApplicationService) updatePromptResource(ctx context.Context, req
 		return nil, errorx.New(errno.ErrPromptPermissionCode, errorx.KV("msg", "no permission"))
 	}
 
-	promptResource.Name = req.Prompt.GetName()
-	promptResource.Description = req.Prompt.GetDescription()
-	promptResource.PromptText = req.Prompt.GetPromptText()
-
-	err = p.DomainSVC.UpdatePromptResource(ctx, promptResource)
+	err = p.DomainSVC.UpdatePromptResource(ctx, promptID, req.Prompt.Name, req.Prompt.Description, req.Prompt.PromptText)
 	if err != nil {
 		return nil, err
 	}

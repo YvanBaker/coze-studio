@@ -32,37 +32,33 @@ import (
 	"unicode/utf8"
 
 	"github.com/bytedance/sonic"
-	redisV9 "github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
+	"github.com/coze-dev/coze-studio/backend/api/model/app/developer_api"
 	"github.com/coze-dev/coze-studio/backend/api/model/crossdomain/knowledge"
 	knowledgeModel "github.com/coze-dev/coze-studio/backend/api/model/crossdomain/knowledge"
-	"github.com/coze-dev/coze-studio/backend/api/model/ocean/cloud/developer_api"
 	"github.com/coze-dev/coze-studio/backend/application/base/ctxutil"
-	"github.com/coze-dev/coze-studio/backend/domain/knowledge/repository"
-
 	"github.com/coze-dev/coze-studio/backend/domain/knowledge/entity"
 	"github.com/coze-dev/coze-studio/backend/domain/knowledge/internal/consts"
 	"github.com/coze-dev/coze-studio/backend/domain/knowledge/internal/convert"
 	"github.com/coze-dev/coze-studio/backend/domain/knowledge/internal/dal/model"
 	"github.com/coze-dev/coze-studio/backend/domain/knowledge/internal/events"
 	"github.com/coze-dev/coze-studio/backend/domain/knowledge/processor/impl"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/cache"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/chatmodel"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/document/nl2sql"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/document/ocr"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/document/parser"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/document/rerank"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/document/searchstore"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/eventbus"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/idgen"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/messages2query"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/rdb"
-	rdbEntity "github.com/coze-dev/coze-studio/backend/infra/contract/rdb/entity"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/storage"
-	"github.com/coze-dev/coze-studio/backend/infra/impl/document/parser/builtin"
-	"github.com/coze-dev/coze-studio/backend/infra/impl/document/progressbar"
-	"github.com/coze-dev/coze-studio/backend/infra/impl/document/rerank/rrf"
+	"github.com/coze-dev/coze-studio/backend/domain/knowledge/repository"
+	"github.com/coze-dev/coze-studio/backend/infra/cache"
+	"github.com/coze-dev/coze-studio/backend/infra/chatmodel"
+	"github.com/coze-dev/coze-studio/backend/infra/document/messages2query"
+	"github.com/coze-dev/coze-studio/backend/infra/document/nl2sql"
+	"github.com/coze-dev/coze-studio/backend/infra/document/ocr"
+	"github.com/coze-dev/coze-studio/backend/infra/document/parser"
+	"github.com/coze-dev/coze-studio/backend/infra/document/progressbar"
+	"github.com/coze-dev/coze-studio/backend/infra/document/rerank"
+	"github.com/coze-dev/coze-studio/backend/infra/document/searchstore"
+	"github.com/coze-dev/coze-studio/backend/infra/eventbus"
+	"github.com/coze-dev/coze-studio/backend/infra/idgen"
+	"github.com/coze-dev/coze-studio/backend/infra/rdb"
+	rdbEntity "github.com/coze-dev/coze-studio/backend/infra/rdb/entity"
+	"github.com/coze-dev/coze-studio/backend/infra/storage"
 	"github.com/coze-dev/coze-studio/backend/pkg/errorx"
 	"github.com/coze-dev/coze-studio/backend/pkg/lang/ptr"
 	"github.com/coze-dev/coze-studio/backend/pkg/lang/slices"
@@ -72,50 +68,42 @@ import (
 
 func NewKnowledgeSVC(config *KnowledgeSVCConfig) (Knowledge, eventbus.ConsumerHandler) {
 	svc := &knowledgeSVC{
-		knowledgeRepo:             repository.NewKnowledgeDAO(config.DB),
-		documentRepo:              repository.NewKnowledgeDocumentDAO(config.DB),
-		sliceRepo:                 repository.NewKnowledgeDocumentSliceDAO(config.DB),
-		reviewRepo:                repository.NewKnowledgeDocumentReviewDAO(config.DB),
-		idgen:                     config.IDGen,
-		rdb:                       config.RDB,
-		producer:                  config.Producer,
-		searchStoreManagers:       config.SearchStoreManagers,
-		parseManager:              config.ParseManager,
-		storage:                   config.Storage,
-		reranker:                  config.Reranker,
-		rewriter:                  config.Rewriter,
-		nl2Sql:                    config.NL2Sql,
-		enableCompactTable:        ptr.FromOrDefault(config.EnableCompactTable, true),
-		cacheCli:                  config.CacheCli,
-		isAutoAnnotationSupported: config.IsAutoAnnotationSupported,
-		modelFactory:              config.ModelFactory,
-	}
-	if svc.reranker == nil {
-		svc.reranker = rrf.NewRRFReranker(0)
-	}
-	if svc.parseManager == nil {
-		svc.parseManager = builtin.NewManager(config.Storage, config.OCR, nil)
+		knowledgeRepo:       repository.NewKnowledgeDAO(config.DB),
+		documentRepo:        repository.NewKnowledgeDocumentDAO(config.DB),
+		sliceRepo:           repository.NewKnowledgeDocumentSliceDAO(config.DB),
+		reviewRepo:          repository.NewKnowledgeDocumentReviewDAO(config.DB),
+		idgen:               config.IDGen,
+		rdb:                 config.RDB,
+		producer:            config.Producer,
+		searchStoreManagers: config.SearchStoreManagers,
+		parseManager:        config.ParseManager,
+		storage:             config.Storage,
+		reranker:            config.Reranker,
+		rewriter:            config.Rewriter,
+		nl2Sql:              config.NL2Sql,
+		enableCompactTable:  ptr.FromOrDefault(config.EnableCompactTable, true),
+		cacheCli:            config.CacheCli,
+		modelFactory:        config.ModelFactory,
 	}
 
 	return svc, svc
 }
 
 type KnowledgeSVCConfig struct {
-	DB                        *gorm.DB                       // required
-	IDGen                     idgen.IDGenerator              // required
-	RDB                       rdb.RDB                        // Required: Form storage
-	Producer                  eventbus.Producer              // Required: Document indexing process goes through mq asynchronous processing
-	SearchStoreManagers       []searchstore.Manager          // Required: Vector/Full Text
-	ParseManager              parser.Manager                 // Optional: document segmentation and processing capability, default builtin parser
-	Storage                   storage.Storage                // required: oss
-	ModelFactory              chatmodel.Factory              // Required: Model factory
-	Rewriter                  messages2query.MessagesToQuery // Optional: Do not overwrite when not configured
-	Reranker                  rerank.Reranker                // Optional: default rrf when not configured
-	NL2Sql                    nl2sql.NL2SQL                  // Optional: Not supported by default when not configured
-	EnableCompactTable        *bool                          // Optional: Table data compression, default true
-	OCR                       ocr.OCR                        // Optional: ocr, ocr function is not available when not provided
-	CacheCli                  cache.Cmdable                  // Optional: cache implementation
-	IsAutoAnnotationSupported bool                           // Does it support automatic image labeling?
+	DB                  *gorm.DB                       // required
+	IDGen               idgen.IDGenerator              // required
+	RDB                 rdb.RDB                        // Required: Form storage
+	Producer            eventbus.Producer              // Required: Document indexing process goes through mq asynchronous processing
+	SearchStoreManagers []searchstore.Manager          // Required: Vector/Full Text
+	ParseManager        parser.Manager                 // Optional: document segmentation and processing capability, default builtin parser
+	Storage             storage.Storage                // required: oss
+	ModelFactory        chatmodel.Factory              // Required: Model factory
+	Rewriter            messages2query.MessagesToQuery // Optional: Do not overwrite when not configured
+	Reranker            rerank.Reranker                // Optional: default rrf when not configured
+	NL2Sql              nl2sql.NL2SQL                  // Optional: Not supported by default when not configured
+	EnableCompactTable  *bool                          // Optional: Table data compression, default true
+	OCR                 ocr.OCR                        // Optional: ocr, ocr function is not available when not provided
+	CacheCli            cache.Cmdable                  // Optional: cache implementation
 }
 
 type knowledgeSVC struct {
@@ -125,18 +113,17 @@ type knowledgeSVC struct {
 	reviewRepo    repository.KnowledgeDocumentReviewRepo
 	modelFactory  chatmodel.Factory
 
-	idgen                     idgen.IDGenerator
-	rdb                       rdb.RDB
-	producer                  eventbus.Producer
-	searchStoreManagers       []searchstore.Manager
-	parseManager              parser.Manager
-	rewriter                  messages2query.MessagesToQuery
-	reranker                  rerank.Reranker
-	storage                   storage.Storage
-	nl2Sql                    nl2sql.NL2SQL
-	cacheCli                  cache.Cmdable
-	enableCompactTable        bool // Table data compression
-	isAutoAnnotationSupported bool // Does it support automatic image labeling?
+	idgen               idgen.IDGenerator
+	rdb                 rdb.RDB
+	producer            eventbus.Producer
+	searchStoreManagers []searchstore.Manager
+	parseManager        parser.Manager
+	rewriter            messages2query.MessagesToQuery
+	reranker            rerank.Reranker
+	storage             storage.Storage
+	nl2Sql              nl2sql.NL2SQL
+	cacheCli            cache.Cmdable
+	enableCompactTable  bool // Table data compression
 }
 
 func (k *knowledgeSVC) CreateKnowledge(ctx context.Context, request *CreateKnowledgeRequest) (response *CreateKnowledgeResponse, err error) {
@@ -320,7 +307,7 @@ func (k *knowledgeSVC) checkRequest(request *CreateDocumentRequest) error {
 	}
 	for i := range request.Documents {
 		if request.Documents[i].Type == knowledgeModel.DocumentTypeImage && ptr.From(request.Documents[i].ParsingStrategy.CaptionType) == parser.ImageAnnotationTypeModel {
-			if !k.isAutoAnnotationSupported {
+			if !k.parseManager.IsAutoAnnotationSupported() {
 				return errors.New("auto caption type is not supported")
 			}
 		}
@@ -446,14 +433,14 @@ func (k *knowledgeSVC) DeleteDocument(ctx context.Context, request *DeleteDocume
 		}
 	}
 
-	err = k.documentRepo.DeleteDocuments(ctx, []int64{request.DocumentID})
-	if err != nil {
-		return errorx.New(errno.ErrKnowledgeDBCode, errorx.KV("msg", err.Error()))
-	}
-
 	sliceIDs, err := k.sliceRepo.GetDocumentSliceIDs(ctx, []int64{request.DocumentID})
 	if err != nil {
 		logs.CtxErrorf(ctx, "[DeleteDocument] get document slice ids failed, err: %v", err)
+		return errorx.New(errno.ErrKnowledgeDBCode, errorx.KV("msg", err.Error()))
+	}
+
+	err = k.documentRepo.DeleteDocuments(ctx, []int64{request.DocumentID})
+	if err != nil {
 		return errorx.New(errno.ErrKnowledgeDBCode, errorx.KV("msg", err.Error()))
 	}
 
@@ -565,7 +552,7 @@ func (k *knowledgeSVC) MGetDocumentProgress(ctx context.Context, request *MGetDo
 }
 
 func (k *knowledgeSVC) getProgressFromCache(ctx context.Context, documentProgress *DocumentProgress) (err error) {
-	progressBar := progressbar.NewProgressBar(ctx, documentProgress.ID, 0, k.cacheCli, false)
+	progressBar := progressbar.New(ctx, documentProgress.ID, 0, k.cacheCli, false)
 	percent, remainSec, errMsg := progressBar.GetProgress(ctx)
 	documentProgress.Progress = int(percent)
 	documentProgress.RemainingSec = int64(remainSec)
@@ -889,9 +876,8 @@ func (k *knowledgeSVC) ListSlice(ctx context.Context, request *ListSliceRequest)
 		KnowledgeID: ptr.From(request.KnowledgeID),
 		DocumentID:  ptr.From(request.DocumentID),
 		Keyword:     request.Keyword,
-		Sequence:    request.Sequence,
+		Offset:      request.Sequence,
 		PageSize:    request.Limit,
-		Offset:      request.Offset,
 	})
 	if err != nil {
 		logs.CtxErrorf(ctx, "list slice failed, err: %v", err)
@@ -1388,12 +1374,12 @@ func (k *knowledgeSVC) ListPhotoSlice(ctx context.Context, request *ListPhotoSli
 	if request == nil {
 		return nil, errorx.New(errno.ErrKnowledgeInvalidParamCode, errorx.KV("msg", "request is empty"))
 	}
-	sliceArr, total, err := k.sliceRepo.FindSliceByCondition(ctx, &entity.WhereSliceOpt{
+	sliceArr, total, err := k.sliceRepo.ListPhotoSlice(ctx, &entity.WherePhotoSliceOpt{
 		KnowledgeID: request.KnowledgeID,
 		DocumentIDs: request.DocumentIDs,
-		Offset:      int64(ptr.From(request.Offset)),
-		PageSize:    int64(ptr.From(request.Limit)),
-		NotEmpty:    request.HasCaption,
+		Offset:      request.Offset,
+		Limit:       request.Limit,
+		HasCaption:  request.HasCaption,
 	})
 	if err != nil {
 		return nil, errorx.New(errno.ErrKnowledgeDBCode, errorx.KV("msg", err.Error()))
@@ -1413,7 +1399,7 @@ func (k *knowledgeSVC) ExtractPhotoCaption(ctx context.Context, request *Extract
 	if request == nil {
 		return nil, errorx.New(errno.ErrKnowledgeInvalidParamCode, errorx.KV("msg", "request is empty"))
 	}
-	if !k.isAutoAnnotationSupported {
+	if !k.parseManager.IsAutoAnnotationSupported() {
 		return nil, errorx.New(errno.ErrKnowledgeAutoAnnotationNotSupportedCode, errorx.KV("msg", "auto annotation is not supported"))
 	}
 	docInfo, err := k.documentRepo.GetByID(ctx, request.DocumentID)
@@ -1484,7 +1470,7 @@ func (k *knowledgeSVC) getObjectURL(ctx context.Context, uri string) (string, er
 		if err != nil {
 			return "", errorx.New(errno.ErrKnowledgeGetObjectURLFailCode, errorx.KV("msg", fmt.Sprintf("get object url failed, %v", err)))
 		}
-		if errors.Is(cmd.Err(), redisV9.Nil) {
+		if errors.Is(cmd.Err(), cache.Nil) {
 			err = k.cacheCli.Set(ctx, uri, url, cacheTime*time.Second).Err()
 			if err != nil {
 				logs.CtxErrorf(ctx, "[getObjectURL] set cache failed, %v", err)
@@ -1499,12 +1485,26 @@ func (k *knowledgeSVC) getObjectURL(ctx context.Context, uri string) (string, er
 
 func (k *knowledgeSVC) genMultiIDs(ctx context.Context, counts int) ([]int64, error) {
 	allIDs := make([]int64, 0)
+	retryInterval := 5 * time.Millisecond
 	for l := 0; l < counts; l += 100 {
 		r := min(l+100, counts)
 		batchSize := r - l
-		ids, err := k.idgen.GenMultiIDs(ctx, batchSize)
-		if err != nil {
-			return nil, errorx.New(errno.ErrKnowledgeIDGenCode, errorx.KV("msg", fmt.Sprintf("GenMultiIDs failed, err: %v", err)))
+		var ids []int64
+		var err error
+		maxRetries := 5
+		retryCount := 0
+		for {
+			ids, err = k.idgen.GenMultiIDs(ctx, batchSize)
+			if err != nil {
+				if retryCount >= maxRetries {
+					return nil, errorx.New(errno.ErrKnowledgeIDGenCode, errorx.KV("msg", fmt.Sprintf("GenMultiIDs failed, err: %v", err)))
+				}
+				logs.CtxErrorf(ctx, "[genMultiIDs] GenMultiIDs failed, retry %d/%d: %v", retryCount+1, maxRetries, err)
+				time.Sleep(retryInterval)
+				retryCount++
+				continue
+			}
+			break
 		}
 		allIDs = append(allIDs, ids...)
 	}

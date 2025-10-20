@@ -21,12 +21,6 @@ type PluginEntity struct {
 	PluginVersion *string // nil or "0" means draft, "" means latest/online version, otherwise is specific version
 }
 
-type DependenceResource struct {
-	PluginIDs    []int64
-	KnowledgeIDs []int64
-	DatabaseIDs  []int64
-}
-
 type ExternalResourceRelated struct {
 	PluginMap     map[int64]*PluginEntity
 	PluginToolMap map[int64]int64
@@ -40,4 +34,10 @@ type CopyWorkflowPolicy struct {
 	TargetAppID              *int64
 	ModifiedCanvasSchema     *string
 	ShouldModifyWorkflowName bool
+}
+
+type DependenceResource struct {
+	PluginIDs    []int64
+	KnowledgeIDs []int64
+	DatabaseIDs  []int64
 }

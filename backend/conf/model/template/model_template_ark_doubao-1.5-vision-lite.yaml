@@ -1,4 +1,4 @@
-id: 65536
+id: 60060
 name: Doubao-1.5-Vision-Lite
 icon_uri: default_icon/doubao_v2.png
 icon_url: ""
@@ -115,6 +115,7 @@ meta:
         top_p: 0.7
         top_k: 0
         stop: []
+        enable_base64_url: false
         ark:
             region: ""
             access_key: ""

@@ -19,16 +19,15 @@ package memory
 import (
 	"gorm.io/gorm"
 
-	"github.com/redis/go-redis/v9"
-
 	database "github.com/coze-dev/coze-studio/backend/domain/memory/database/service"
 	"github.com/coze-dev/coze-studio/backend/domain/memory/variables/repository"
 	variables "github.com/coze-dev/coze-studio/backend/domain/memory/variables/service"
 	search "github.com/coze-dev/coze-studio/backend/domain/search/service"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/idgen"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/rdb"
-	"github.com/coze-dev/coze-studio/backend/infra/contract/storage"
-	rdbService "github.com/coze-dev/coze-studio/backend/infra/impl/rdb"
+	"github.com/coze-dev/coze-studio/backend/infra/cache"
+	"github.com/coze-dev/coze-studio/backend/infra/idgen"
+	"github.com/coze-dev/coze-studio/backend/infra/rdb"
+	rdbService "github.com/coze-dev/coze-studio/backend/infra/rdb/impl/rdb"
+	"github.com/coze-dev/coze-studio/backend/infra/storage"
 )
 
 type MemoryApplicationServices struct {
@@ -43,7 +42,7 @@ type ServiceComponents struct {
 	EventBus               search.ResourceEventBus
 	TosClient              storage.Storage
 	ResourceDomainNotifier search.ResourceEventBus
-	CacheCli               *redis.Client
+	CacheCli               cache.Cmdable
 }
 
 func InitService(c *ServiceComponents) *MemoryApplicationServices {
